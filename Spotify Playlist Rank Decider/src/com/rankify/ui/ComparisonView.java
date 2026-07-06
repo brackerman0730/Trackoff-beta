@@ -47,6 +47,7 @@ public final class ComparisonView {
 
     // ----- sidebar -----
     private VBox    sidebar;
+    private Button undoBtn;
     private Button  toggleSidebarBtn;
     private ListView<String> rankingList;
     private final ObservableList<String> rankingItems = FXCollections.observableArrayList();
@@ -114,10 +115,15 @@ public final class ComparisonView {
 
         // ---- Stats + save & exit row ----
         stats.getStyleClass().add("label-stats");
+        undoBtn = ghostButton("↶ Undo");
+        undoBtn.setOnAction(e -> undoLast());
+        undoBtn.setDisable(true);
+        undoBtn.setTooltip(new Tooltip("Take back your most recent choice (Ctrl+Z)"));
+
         Button save = ghostButton("Save & Exit");
         save.setOnAction(e -> saveAndExit());
 
-        HBox bottom = new HBox(15, progress, save);
+        HBox bottom = new HBox(15, progress, undoBtn, save);    
         bottom.setAlignment(Pos.CENTER_LEFT);
         HBox.setHgrow(progress, Priority.ALWAYS);
         progress.setMaxWidth(Double.MAX_VALUE);
@@ -146,12 +152,27 @@ public final class ComparisonView {
         stage.setScene(scene);
         stage.setTitle("Rankify — " + playlist.name());
 
+        // Ctrl+Z anywhere on the compare screen triggers undo.
+        scene.setOnKeyPressed(e -> {
+            if (e.isControlDown() && e.getCode() == javafx.scene.input.KeyCode.Z) {
+                undoLast();
+            }
+        });
         refresh();
     }
 
     // ------------------------------------------------------------------
+    // Extra thingy
+    // ------------------------------------------------------------------
+    private void undoLast() {
+        if (!ranker.canUndo()) return;
+        ranker.undo();
+        refresh();
+    }
+    // ------------------------------------------------------------------
     //  Sidebar
     // ------------------------------------------------------------------
+
     private VBox buildSidebar() {
         Label title = new Label("CURRENT ORDER");
         title.getStyleClass().add("label-section");
@@ -269,7 +290,10 @@ public final class ComparisonView {
         stats.setText(String.format(
                 "Comparison %d   •   %d auto-resolved   •   ~%d max",
                 asked, saved, estTot));
-
+        undoBtn.setDisable(!ranker.canUndo());
+        undoBtn.setText(ranker.canUndo()
+                ? "↶ Undo (" + ranker.undoDepth() + ")"
+                : "↶ Undo");
         refreshSidebar();
     }
 

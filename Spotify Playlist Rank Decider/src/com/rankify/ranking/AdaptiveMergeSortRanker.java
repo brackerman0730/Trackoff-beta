@@ -65,6 +65,23 @@ public final class AdaptiveMergeSortRanker {
     /** Songs the user marked as unknown — excluded from the final ranking. */
     private final java.util.Set<String> removedIds = new java.util.HashSet<>();
 
+    /** In-memory undo history. Each frame is a full state snapshot. */
+    private final java.util.Deque<UndoFrame> undoStack = new java.util.ArrayDeque<>();
+
+    /** Cap history so long sessions don't grow unbounded. */
+    private static final int MAX_UNDO_DEPTH = 200;
+
+    /** All the mutable state we need to bring back on undo. */
+    private record UndoFrame(
+            int[] order,
+            int width, int leftStart, int mid, int rightEnd, int i, int j,
+            int[] buffer, int bufferSize,
+            boolean done,
+            int comparisonsAsked, int comparisonsSkippedByCache,
+            TransitivityCache cacheSnapshot,
+            java.util.Set<String> removedIdsSnapshot
+    ) { }
+
     // ------------------------------------------------------------------
 
     public AdaptiveMergeSortRanker(Playlist playlist) {
@@ -90,6 +107,7 @@ public final class AdaptiveMergeSortRanker {
     /** Apply the user's answer to the pending question and advance. */
     public void submit(ComparisonChoice choice) {
         if (pending == null) throw new IllegalStateException("No pending comparison.");
+        pushUndoFrame();
         Song left  = pending.left();
         Song right = pending.right();
         pending    = null;
@@ -126,6 +144,60 @@ public final class AdaptiveMergeSortRanker {
             }
         }
         advanceUntilQuestion();
+    }
+    /** True if there's at least one comparison the user can take back. */
+    public boolean canUndo() { return !undoStack.isEmpty(); }
+
+    /** Number of moves currently on the undo stack (handy for UI). */
+    public int undoDepth() { return undoStack.size(); }
+
+    /**
+     * Roll the ranker back to just before the most recent {@link #submit(ComparisonChoice)}.
+     * The user will be re-asked the same question that was answered last.
+     */
+    public void undo() {
+        if (undoStack.isEmpty()) return;
+        UndoFrame f = undoStack.pop();
+
+        this.order      = f.order.clone();
+        this.width      = f.width;
+        this.leftStart  = f.leftStart;
+        this.mid        = f.mid;
+        this.rightEnd   = f.rightEnd;
+        this.i          = f.i;
+        this.j          = f.j;
+        this.buffer     = f.buffer == null ? null : f.buffer.clone();
+        this.bufferSize = f.bufferSize;
+        this.done       = f.done;
+        this.comparisonsSkippedByCache = f.comparisonsSkippedByCache;
+
+        // The frame captured the count *including* the question that was on-screen.
+        // advanceUntilQuestion() below will re-surface that same question and
+        // increment the counter, so pre-decrement by 1 to keep it accurate.
+        this.comparisonsAsked = f.comparisonsAsked - 1;
+
+        this.cache.replaceWith(f.cacheSnapshot);
+        this.removedIds.clear();
+        this.removedIds.addAll(f.removedIdsSnapshot);
+
+        this.pending = null;
+        advanceUntilQuestion();
+    }
+
+    /** Snapshot every piece of mutable state into a new undo frame. */
+    private void pushUndoFrame() {
+        UndoFrame frame = new UndoFrame(
+                order.clone(),
+                width, leftStart, mid, rightEnd, i, j,
+                buffer == null ? null : buffer.clone(),
+                bufferSize,
+                done,
+                comparisonsAsked, comparisonsSkippedByCache,
+                cache.copy(),
+                new java.util.HashSet<>(removedIds)
+        );
+        undoStack.push(frame);
+        while (undoStack.size() > MAX_UNDO_DEPTH) undoStack.pollLast();
     }
 
     public boolean isFinished() { return done; }
@@ -241,6 +313,7 @@ public final class AdaptiveMergeSortRanker {
     }
 
     public void restore(Snapshot s) {
+        undoStack.clear();
         this.order      = indicesOf(s.orderIds);
         this.width      = s.width;
         this.leftStart  = s.leftStart;

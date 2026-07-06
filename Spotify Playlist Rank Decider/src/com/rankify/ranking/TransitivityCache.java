@@ -6,29 +6,18 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Tracks the directed "is preferred over" graph that the user implicitly
- * builds as they answer comparisons. Used to skip questions whose answer
- * is already known by transitivity:
- *
- *     A &gt; B  and  B &gt; C   implies   A &gt; C
- *
- * Implementation:
- *   - Adjacency list keyed by song id.
- *   - On insert, we recompute reachable sets lazily via DFS.
- *
- * For playlists up to a few hundred songs this is trivially fast.
+ * Directed "is preferred over" graph built from user answers.
+ * Now supports {@link #copy()} / {@link #replaceWith(TransitivityCache)}
+ * so callers (the ranker's undo stack) can snapshot and restore it.
  */
 public final class TransitivityCache {
 
-    /** preferredOver.get(a) is the set of songs known to be less preferred than a. */
     private final Map<String, Set<String>> preferredOver = new HashMap<>();
 
-    /** Record: {@code winner} is preferred over {@code loser}. */
     public void recordPreference(String winner, String loser) {
         preferredOver.computeIfAbsent(winner, k -> new HashSet<>()).add(loser);
     }
 
-    /** True if {@code a} is known to be preferred over {@code b} (directly or by transitivity). */
     public boolean isPreferredOver(String a, String b) {
         return reachable(a, b, new HashSet<>());
     }
@@ -45,4 +34,21 @@ public final class TransitivityCache {
     }
 
     public int size() { return preferredOver.size(); }
+
+    /** Deep copy — the returned cache shares no mutable state with this one. */
+    public TransitivityCache copy() {
+        TransitivityCache c = new TransitivityCache();
+        for (Map.Entry<String, Set<String>> e : preferredOver.entrySet()) {
+            c.preferredOver.put(e.getKey(), new HashSet<>(e.getValue()));
+        }
+        return c;
+    }
+
+    /** Overwrite this cache's contents with a deep copy of {@code other}. */
+    public void replaceWith(TransitivityCache other) {
+        preferredOver.clear();
+        for (Map.Entry<String, Set<String>> e : other.preferredOver.entrySet()) {
+            preferredOver.put(e.getKey(), new HashSet<>(e.getValue()));
+        }
+    }
 }
