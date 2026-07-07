@@ -44,16 +44,17 @@ public final class MainView {
         Button loadCsv    = primaryButton("Load playlist CSV");
         Button spotifyBtn = secondaryButton("Load from Spotify URL");
         Button tierBtn    = secondaryButton("Skip ranking → Tier List from CSV");
+        Button swipeBtn = secondaryButton("Swipe (Keep / Delete)");
         Button resumeBtn  = ghostButton("Resume saved session");
         Button credsBtn   = ghostButton("Set Spotify credentials");
-
         loadCsv   .setOnAction(e -> chooseAndStart());
         spotifyBtn.setOnAction(e -> loadFromSpotify());
         tierBtn   .setOnAction(e -> loadCsvForTierList());
+        swipeBtn.setOnAction(e -> startSwipe());
         resumeBtn .setOnAction(e -> chooseAndResume());
         credsBtn  .setOnAction(e -> promptForCredentials(true));
 
-        for (Button b : new Button[]{loadCsv, spotifyBtn, tierBtn, resumeBtn, credsBtn}) {
+        for (Button b : new Button[]{loadCsv, spotifyBtn, tierBtn, swipeBtn, resumeBtn, credsBtn}) {
             b.setMaxWidth(320);
             b.setPrefHeight(46);
         }
@@ -62,7 +63,7 @@ public final class MainView {
         spacer.setPrefHeight(20);
 
         VBox root = new VBox(12, title, subtitle, spacer,
-                             loadCsv, spotifyBtn, tierBtn, resumeBtn, credsBtn);
+                             loadCsv, spotifyBtn, tierBtn, swipeBtn, resumeBtn, credsBtn);
         root.setAlignment(Pos.CENTER);
         root.setPadding(new Insets(60));
 
@@ -103,7 +104,66 @@ public final class MainView {
             error("Couldn't load playlist: " + ex.getMessage());
         }
     }
+    /**
+     * Swipe mode. Asks the user whether they want to load a local CSV or
+     * pull a playlist from a Spotify URL — Spotify imports carry preview
+     * URLs and album art, so those cards auto-play while they're on top.
+     */
+    private void startSwipe() {
+        Alert choose = new Alert(Alert.AlertType.CONFIRMATION);
+        choose.setTitle("Swipe");
+        choose.setHeaderText("Where should the playlist come from?");
+        choose.setContentText("Spotify imports include album art and 30s previews.");
 
+        javafx.scene.control.ButtonType csvBtn     = new javafx.scene.control.ButtonType("CSV file");
+        javafx.scene.control.ButtonType spotifyBtn = new javafx.scene.control.ButtonType("Spotify URL");
+        javafx.scene.control.ButtonType cancelBtn  =
+                new javafx.scene.control.ButtonType("Cancel", javafx.scene.control.ButtonBar.ButtonData.CANCEL_CLOSE);
+        choose.getButtonTypes().setAll(csvBtn, spotifyBtn, cancelBtn);
+        Theme.apply(choose.getDialogPane().getScene());
+
+        var pick = choose.showAndWait().orElse(cancelBtn);
+        if (pick == csvBtn)          swipeFromCsv();
+        else if (pick == spotifyBtn) swipeFromSpotify();
+    }
+
+    private void swipeFromCsv() {
+        File f = csvChooser("Select playlist file").showOpenDialog(stage);
+        if (f == null) return;
+        try {
+            Playlist playlist = new CsvPlaylistSource().load(f.getAbsolutePath());
+            if (playlist.size() < 1) { info("Empty playlist."); return; }
+            new SwipeView(stage, playlist, playlist.songs()).show();
+        } catch (Exception ex) {
+            error("Couldn't load playlist: " + ex.getMessage());
+        }
+    }
+
+    private void swipeFromSpotify() {
+        String[] creds = loadCredentials();
+        if (creds == null) {
+            info("You need to set your Spotify Client ID and Secret first.");
+            creds = promptForCredentials(false);
+            if (creds == null) return;
+        }
+
+        TextInputDialog urlDialog = new TextInputDialog();
+        urlDialog.setTitle("Load Spotify Playlist");
+        urlDialog.setHeaderText("Paste a Spotify playlist URL or ID");
+        urlDialog.setContentText("URL:");
+        urlDialog.getDialogPane().setPrefWidth(500);
+        Theme.apply(urlDialog.getDialogPane().getScene());
+        String url = urlDialog.showAndWait().orElse("").trim();
+        if (url.isEmpty()) return;
+
+        try {
+            Playlist playlist = new SpotifyPlaylistSource(creds[0], creds[1]).load(url);
+            if (playlist.size() < 1) { info("Empty playlist."); return; }
+            new SwipeView(stage, playlist, playlist.songs()).show();
+        } catch (Exception ex) {
+            error("Spotify load failed: " + ex.getMessage());
+        }
+    }
     private void loadFromSpotify() {
         String[] creds = loadCredentials();
         if (creds == null) {
